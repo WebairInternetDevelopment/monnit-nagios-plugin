@@ -1,0 +1,6 @@
+{
+    "require": {
+        "nategood/commando": "^0.2.9",
+        "vlucas/phpdotenv": "^2.4"
+    }
+}
