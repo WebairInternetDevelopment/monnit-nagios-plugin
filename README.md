@@ -1,6 +1,6 @@
 Monnitor - a simple Nagios plugin for Monnit temperature sensors.
 
-Requirements: PHP5.3+, Composer
+Requirements: PHP5.4+, Composer
 
 Setup: Run "composer install" to install dependencies, rename .env.example to .env and add your Monnit API key to it.
 
