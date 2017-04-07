@@ -1,0 +1,161 @@
+<?php
+
+define('N_OK', 0);
+define('N_WARN', 1);
+define('N_CRIT', 2);
+define('N_UNKNOWN', 3);
+
+define('SENSOR_TEMP', 2);
+define('SENSOR_TEMP_HUMIDITY', 43);
+define('SENSOR_DOOR', 9);
+define('SENSOR_RANGE_EXTENDER', 45);
+
+
+require_once 'vendor/autoload.php';
+require_once 'class.MonnitReader.php';
+
+
+
+try {
+    $dotEnv = new Dotenv\Dotenv(__DIR__);
+    $dotEnv->load();
+    $dotEnv->required('MONNIT_API_KEY');
+} catch (Exception $e) {
+    echo "Couldn't load the .env configuration file. Error: {$e->getMessage()}\n";
+    exit(N_UNKNOWN);
+}
+
+try {
+    $authKey = getenv('MONNIT_API_KEY');
+    $Reader = new MonnitReader($authKey);
+} catch (Exception $e) {
+    echo "Couldn't instantiate MonnitReader object: {$e->getMessage()}";
+    exit(N_UNKNOWN);
+}
+
+
+$cmd = new Commando\Command();
+
+$helpString = "monnitor - obtain current read values from Monnit sensors\n";
+$helpString .= "Example usage:\n";
+$helpString .= "\t php monnitor.php --single 012345\n";
+$helpString .= "\t php monnitor.php --average \"012345 012346 012347 012348\"";
+$cmd->setHelp($helpString);
+
+$cmd->flag('s')
+    ->aka('single')
+    ->describedAs('Return current reading value of a single sensor.')
+    ->must(function ($single) {
+        return isset($single);
+    });
+
+$cmd->flag('a')
+    ->aka('average')
+    ->describedAs('Returns average of temperatures from sensors. Optionally, a list of sensor IDs may be provided. They must be surrounded by quotes. Example: "[sensorID 1] [sensorID 2] [sensorID n]" ')
+    ->map(function ($orig) {
+        return explode(" ", $orig);
+    });
+
+$cmd->flag('w')
+    ->aka('warning')
+    ->describedAs('Warning threshold- if this value is exceeded a WARN response will be issued to Nagios.')
+    ->must(function ($value) {
+        return is_numeric($value);
+    });
+
+$cmd->flag('c')
+    ->aka('critical')
+    ->describedAs('Critical threshold- if this value is exceeded a CRIT resopnse will be issued to Nagios.')
+    ->must(function ($value) {
+        return is_numeric($value);
+    });
+
+
+if ($argc <= 1) {
+    $cmd->printHelp();
+    exit(N_UNKNOWN);
+}
+
+if (!empty($cmd['w'])) {
+    $warningThreshold = floatval($cmd['w']);
+}
+
+if (!empty($cmd['c'])) {
+    $criticalThreshold = floatval($cmd['c']);
+}
+
+
+if (!empty($cmd['s'])) {
+    $sensorID = $cmd['s'];
+
+    try {
+        $Reader->readSingleSensor($sensorID);
+    } catch (Exception $e) {
+        echo "Request for sensor {$sensorID} failed: {$e->getMessage()}";
+        exit(N_UNKNOWN);
+    }
+
+    $sensorType = $Reader->data['MonnitApplicationID'];
+    $currentRead = $Reader->data['CurrentReading'];
+
+    if ($sensorType == SENSOR_TEMP) {
+        $tempFloat = floatval($currentRead);
+
+        if ((isset($criticalThreshold)) && ($tempFloat > $criticalThreshold)) {
+            $exitCode = N_CRIT;
+        } elseif ((isset($warningThreshold)) && ($tempFloat > $warningThreshold)) {
+            $exitCode = N_WARN;
+        } else {
+            $exitCode = N_OK;
+        }
+    } elseif ($sensorType == SENSOR_TEMP_HUMIDITY) {
+        $tempFloat = floatval(substr($currentRead, 0, strpos($currentRead, "%")));
+
+        if ((isset($criticalThreshold)) && ($tempFloat > $criticalThreshold)) {
+            $exitCode = N_CRIT;
+        } elseif ((isset($warningThreshold)) && ($tempFloat > $warningThreshold)) {
+            $exitCode = N_WARN;
+        } else {
+            $exitCode = N_OK;
+        }
+    } elseif ($sensorType == SENSOR_DOOR) {
+        $doorStatus = $currentRead;
+        if ($doorStatus == "Open") {
+            $exitCode = N_CRIT;
+        } elseif ($doorStatus == "Closed") {
+            $exitCode = N_OK;
+        } else {
+            $exitCode = N_UNKNOWN;
+        }
+    } else {
+        $exitCode = N_OK;
+    }
+    $final = ($sensorType == SENSOR_TEMP) ? floatval($currentRead) : $currentRead;
+
+    print $final;
+    exit($exitCode);
+} elseif (!empty($cmd['a'])) {
+    $idArray = ($cmd['a'][0] == "") ? false : $cmd['a'];
+    try {
+        $Reader->readAllSensors(SENSOR_TEMP);
+    } catch (Exception $e) {
+        echo "Request for all sensors failed: {$e->getMessage()}";
+        exit(N_UNKNOWN);
+    }
+
+    $tempAvg = $Reader->averageTemps($idArray);
+
+    if ((isset($criticalThreshold)) && ($tempAvg > $criticalThreshold)) {
+        var_dump($tempAvg);
+        var_dump($criticalThreshold);
+        $exitCode = N_CRIT;
+    } elseif ((isset($warningThreshold)) && ($tempAvg > $warningThreshold)) {
+        $exitCode = N_WARN;
+    } else {
+        $exitCode = N_OK;
+    }
+
+    print $tempAvg;
+
+    exit($exitCode);
+}
